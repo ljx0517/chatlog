@@ -1,6 +1,7 @@
 package ctx
 
 import (
+	"github.com/rs/zerolog/log"
 	"sync"
 	"time"
 
@@ -97,6 +98,7 @@ func (c *Context) SwitchHistory(account string) {
 }
 
 func (c *Context) SwitchCurrent(info *wechat.Account) {
+	log.Debug().Msg("SwitchCurrent")
 	c.SwitchHistory(info.Name)
 	c.mu.Lock()
 	defer c.mu.Unlock()

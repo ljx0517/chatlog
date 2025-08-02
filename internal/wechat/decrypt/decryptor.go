@@ -2,10 +2,12 @@ package decrypt
 
 import (
 	"context"
+	"github.com/rs/zerolog/log"
 	"io"
 
 	"github.com/sjzar/chatlog/internal/errors"
 	"github.com/sjzar/chatlog/internal/wechat/decrypt/darwin"
+	"github.com/sjzar/chatlog/internal/wechat/decrypt/linux"
 	"github.com/sjzar/chatlog/internal/wechat/decrypt/windows"
 )
 
@@ -32,6 +34,7 @@ type Decryptor interface {
 
 // NewDecryptor 创建一个新的解密器
 func NewDecryptor(platform string, version int) (Decryptor, error) {
+	log.Debug().Msgf("platform: %s %d ", platform, version)
 	// 根据平台返回对应的实现
 	switch {
 	case platform == "windows" && version == 3:
@@ -42,6 +45,8 @@ func NewDecryptor(platform string, version int) (Decryptor, error) {
 		return darwin.NewV3Decryptor(), nil
 	case platform == "darwin" && version == 4:
 		return darwin.NewV4Decryptor(), nil
+	case platform == "linux" && version == 4:
+		return linux.NewV4Decryptor(), nil
 	default:
 		return nil, errors.PlatformUnsupported(platform, version)
 	}

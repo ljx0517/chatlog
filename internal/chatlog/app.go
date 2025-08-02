@@ -2,6 +2,7 @@ package chatlog
 
 import (
 	"fmt"
+	"github.com/rs/zerolog/log"
 	"path/filepath"
 	"runtime"
 	"time"
@@ -730,6 +731,7 @@ func (a *App) selectAccountSelected(i *menu.Item) {
 				Hidden:      false,
 				Selected: func(account string) func(*menu.Item) {
 					return func(*menu.Item) {
+						log.Debug().Msg("histItem Selected")
 						// 如果是当前账号，则无需切换
 						if a.ctx.Current != nil && a.ctx.DataDir == a.ctx.History[account].DataDir {
 							a.mainPages.RemovePage("submenu")

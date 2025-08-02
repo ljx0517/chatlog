@@ -46,6 +46,8 @@ func New(path string, platform string, version int) (DataSource, error) {
 		return darwinv3.New(path)
 	case platform == "darwin" && version == 4:
 		return v4.New(path)
+	case platform == "linux" && version == 4:
+		return v4.New(path)
 	default:
 		return nil, errors.PlatformUnsupported(platform, version)
 	}

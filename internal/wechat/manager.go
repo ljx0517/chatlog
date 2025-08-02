@@ -2,6 +2,7 @@ package wechat
 
 import (
 	"context"
+	"github.com/rs/zerolog/log"
 	"runtime"
 
 	"github.com/sjzar/chatlog/internal/errors"
@@ -61,6 +62,7 @@ func (m *Manager) Load() error {
 	processMap := make(map[string]*model.Process, len(processes))
 
 	for _, p := range processes {
+		log.Debug().Msg("process found " + p.AccountName)
 		account := NewAccount(p)
 
 		accounts = append(accounts, account)

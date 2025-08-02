@@ -1,4 +1,4 @@
-package darwin
+package linux
 
 import (
 	"bytes"
@@ -16,39 +16,36 @@ import (
 )
 
 const (
-	MaxWorkers        = 8
-	MinChunkSize      = 1 * 1024 * 1024 // 1MB
-	ChunkOverlapBytes = 1024            // Greater than all offsets
-	ChunkMultiplier   = 2               // Number of chunks = MaxWorkers * ChunkMultiplier
+	MaxWorkersV3 = 8
 )
 
-var V4KeyPatterns = []KeyPatternInfo{
+var V3KeyPatterns = []KeyPatternInfo{
 	{
-		Pattern: []byte{0x20, 0x66, 0x74, 0x73, 0x35, 0x28, 0x25, 0x00},
-		Offsets: []int{16, -80, 64},
+		Pattern: []byte{0x72, 0x74, 0x72, 0x65, 0x65, 0x5f, 0x69, 0x33, 0x32},
+		Offsets: []int{24},
 	},
 }
 
-type V4Extractor struct {
+type V3Extractor struct {
 	validator   *decrypt.Validator
 	keyPatterns []KeyPatternInfo
 }
 
-func NewV4Extractor() *V4Extractor {
-	return &V4Extractor{
-		keyPatterns: V4KeyPatterns,
+func NewV3Extractor() *V3Extractor {
+	return &V3Extractor{
+		keyPatterns: V3KeyPatterns,
 	}
 }
 
-func (e *V4Extractor) Extract(ctx context.Context, proc *model.Process) (string, error) {
+func (e *V3Extractor) Extract(ctx context.Context, proc *model.Process) (string, error) {
 	if proc.Status == model.StatusOffline {
 		return "", errors.ErrWeChatOffline
 	}
 
-	Check if SIP is disabled, as it's required for memory reading on macOS
-	if !glance.IsSIPDisabled() {
-		return "", errors.ErrSIPEnabled
-	}
+	// Check if SIP is disabled, as it's required for memory reading on macOS
+	//if !glance.IsSIPDisabled() {
+	//	return "", errors.ErrSIPEnabled
+	//}
 
 	if e.validator == nil {
 		return "", errors.ErrValidatorNotSet
@@ -67,10 +64,10 @@ func (e *V4Extractor) Extract(ctx context.Context, proc *model.Process) (string,
 	if workerCount < 2 {
 		workerCount = 2
 	}
-	if workerCount > MaxWorkers {
-		workerCount = MaxWorkers
+	if workerCount > MaxWorkersV3 {
+		workerCount = MaxWorkersV3
 	}
-	log.Debug().Msgf("Starting %d workers for V4 key search", workerCount)
+	log.Debug().Msgf("Starting %d workers for V3 key search", workerCount)
 
 	// Start consumer goroutines
 	var workerWaitGroup sync.WaitGroup
@@ -115,7 +112,7 @@ func (e *V4Extractor) Extract(ctx context.Context, proc *model.Process) (string,
 }
 
 // findMemory searches for memory regions using Glance
-func (e *V4Extractor) findMemory(ctx context.Context, pid uint32, memoryChannel chan<- []byte) error {
+func (e *V3Extractor) findMemory(ctx context.Context, pid uint32, memoryChannel chan<- []byte) error {
 	// Initialize a Glance instance to read process memory
 	g := glance.NewGlance(pid)
 
@@ -192,12 +189,11 @@ func (e *V4Extractor) findMemory(ctx context.Context, pid uint32, memoryChannel 
 			}
 		}
 	}
-
 	return nil
 }
 
-// worker processes memory regions to find V4 version key
-func (e *V4Extractor) worker(ctx context.Context, memoryChannel <-chan []byte, resultChannel chan<- string) {
+// worker processes memory regions to find V3 version key
+func (e *V3Extractor) worker(ctx context.Context, memoryChannel <-chan []byte, resultChannel chan<- string) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -217,7 +213,7 @@ func (e *V4Extractor) worker(ctx context.Context, memoryChannel <-chan []byte, r
 	}
 }
 
-func (e *V4Extractor) SearchKey(ctx context.Context, memory []byte) (string, bool) {
+func (e *V3Extractor) SearchKey(ctx context.Context, memory []byte) (string, bool) {
 	for _, keyPattern := range e.keyPatterns {
 		index := len(memory)
 
@@ -246,7 +242,7 @@ func (e *V4Extractor) SearchKey(ctx context.Context, memory []byte) (string, boo
 				keyData := memory[keyOffset : keyOffset+32]
 
 				// Validate key against database header
-				if keyData, ok := e.validate(ctx, keyData); ok {
+				if e.validator.Validate(keyData) {
 					log.Debug().
 						Str("pattern", hex.EncodeToString(keyPattern.Pattern)).
 						Int("offset", offset).
@@ -263,19 +259,6 @@ func (e *V4Extractor) SearchKey(ctx context.Context, memory []byte) (string, boo
 	return "", false
 }
 
-func (e *V4Extractor) validate(ctx context.Context, keyDate []byte) ([]byte, bool) {
-	if e.validator.Validate(keyDate) {
-		return keyDate, true
-	}
-	// Try to find a valid key by ***
-	return nil, false
-}
-
-func (e *V4Extractor) SetValidate(validator *decrypt.Validator) {
+func (e *V3Extractor) SetValidate(validator *decrypt.Validator) {
 	e.validator = validator
-}
-
-type KeyPatternInfo struct {
-	Pattern []byte
-	Offsets []int
 }

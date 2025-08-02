@@ -15,6 +15,7 @@ type Process struct {
 const (
 	PlatformWindows = "windows"
 	PlatformMacOS   = "darwin"
+	PlatformLinux   = "linux"
 )
 
 const (

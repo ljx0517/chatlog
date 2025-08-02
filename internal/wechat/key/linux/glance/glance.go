@@ -96,7 +96,7 @@ func (g *Glance) Read() ([]byte, error) {
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			// Uncomment for debugging:
-			//fmt.Println(scanner.Text())
+			// fmt.Println(scanner.Text())
 		}
 	}()
 
