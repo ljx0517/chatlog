@@ -1,4 +1,4 @@
-package glance
+package linux_glance
 
 import (
 	"bufio"

@@ -4,14 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	linux_glance "github.com/sjzar/chatlog/internal/wechat/key/linux/glance"
 	"runtime"
 	"sync"
 
 	"github.com/rs/zerolog/log"
-
 	"github.com/sjzar/chatlog/internal/errors"
 	"github.com/sjzar/chatlog/internal/wechat/decrypt"
-	"github.com/sjzar/chatlog/internal/wechat/key/darwin/glance"
 	"github.com/sjzar/chatlog/internal/wechat/model"
 )
 
@@ -114,7 +113,7 @@ func (e *V3Extractor) Extract(ctx context.Context, proc *model.Process) (string,
 // findMemory searches for memory regions using Glance
 func (e *V3Extractor) findMemory(ctx context.Context, pid uint32, memoryChannel chan<- []byte) error {
 	// Initialize a Glance instance to read process memory
-	g := glance.NewGlance(pid)
+	g := linux_glance.NewGlance(pid)
 
 	// Read memory data
 	memory, err := g.Read()
