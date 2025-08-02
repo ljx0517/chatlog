@@ -53,7 +53,7 @@ func GetSimpleDBFile(platform string, version int) string {
 		return "db_storage\\message\\message_0.db"
 	case platform == "darwin" && version == 3:
 		return "Message/msg_0.db"
-	case platform == "darwin" && version == 4:
+	case platform == "linux" && version == 4:
 		//return "db_storage/message/message_0.db"
 		return linux.V4DBFile
 	}
