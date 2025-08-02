@@ -118,7 +118,7 @@ func (e *V4Extractor) Extract(ctx context.Context, proc *model.Process) (string,
 // findMemory searches for memory regions using Glance
 func (e *V4Extractor) findMemory(ctx context.Context, pid uint32, memoryChannel chan<- []byte) error {
 	// Initialize a Glance instance to read process memory
-	g := glance.NewGlance(pid)
+	g := linux_glance.NewGlance(pid)
 
 	// Read memory data
 	memory, err := g.Read()
