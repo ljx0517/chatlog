@@ -45,7 +45,7 @@ func (e *V4Extractor) Extract(ctx context.Context, proc *model.Process) (string,
 		return "", errors.ErrWeChatOffline
 	}
 
-	Check if SIP is disabled, as it's required for memory reading on macOS
+	//Check if SIP is disabled, as it's required for memory reading on macOS
 	if !glance.IsSIPDisabled() {
 		return "", errors.ErrSIPEnabled
 	}
