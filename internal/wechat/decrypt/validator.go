@@ -1,6 +1,7 @@
 package decrypt
 
 import (
+	"github.com/sjzar/chatlog/internal/wechat/process/linux"
 	"path/filepath"
 
 	"github.com/sjzar/chatlog/internal/wechat/decrypt/common"
@@ -53,7 +54,8 @@ func GetSimpleDBFile(platform string, version int) string {
 	case platform == "darwin" && version == 3:
 		return "Message/msg_0.db"
 	case platform == "darwin" && version == 4:
-		return "db_storage/message/message_0.db"
+		//return "db_storage/message/message_0.db"
+		return linux.V4DBFile
 	}
 	return ""
 
