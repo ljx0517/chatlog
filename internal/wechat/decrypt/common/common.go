@@ -7,6 +7,7 @@ import (
 	"crypto/hmac"
 	"encoding/binary"
 	"fmt"
+	"github.com/rs/zerolog/log"
 	"hash"
 	"io"
 	"os"
@@ -93,7 +94,7 @@ func ValidateKey(page1 []byte, key []byte, salt []byte, hashFunc func() hash.Has
 
 	calculatedMAC := mac.Sum(nil)
 	storedMAC := page1[dataEnd : dataEnd+hmacSize]
-
+	log.Debug().Msgf("%s : %s", calculatedMAC, storedMAC)
 	return hmac.Equal(calculatedMAC, storedMAC)
 }
 

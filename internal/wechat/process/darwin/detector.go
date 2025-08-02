@@ -120,7 +120,7 @@ func (d *Detector) initializeProcessInfo(p *process.Process, info *model.Process
 			// /Users/sarv/Library/Containers/com.tencent.xinWeChat/Data/Library/Application Support/com.tencent.xinWeChat/2.0b4.0.9/<id>/Message/msg_0.db
 			// v4:
 			// /Users/sarv/Library/Containers/com.tencent.xWeChat/Data/Documents/xwechat_files/<id>/db_storage/message/message_0.db
-
+			log.Debug().Msg("filePath: " + filePath)
 			info.Status = model.StatusOnline
 			if info.Version == 4 {
 				info.DataDir = strings.Join(parts[:len(parts)-3], string(filepath.Separator))

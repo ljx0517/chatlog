@@ -3,7 +3,7 @@ package glance
 import (
 	"bufio"
 	"fmt"
-	"os/exec"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	FilterRegionType = "MALLOC_NANO"
-	FilterSHRMOD     = "SM=PRV"
-	CommandVmmap     = "vmmap"
+	FilterRegionType = "[heap]" // Linux heap regions
+	FilterSHRMOD     = "SM=PRV" // Keep for compatibility
+	CommandProcMaps  = "/proc/%d/maps"
 )
 
 type MemRegion struct {
@@ -29,15 +29,15 @@ type MemRegion struct {
 }
 
 func GetVmmap(pid uint32) ([]MemRegion, error) {
-	// Execute vmmap command
-	cmd := exec.Command(CommandVmmap, "-wide", fmt.Sprintf("%d", pid))
-	output, err := cmd.CombinedOutput()
+	// Read /proc/pid/maps file instead of vmmap command
+	mapsFile := fmt.Sprintf(CommandProcMaps, pid)
+	content, err := os.ReadFile(mapsFile)
 	if err != nil {
 		return nil, errors.RunCmdFailed(err)
 	}
 
-	// Parse the output using the existing LoadVmmap function
-	return LoadVmmap(string(output))
+	// Parse the output using the updated LoadVmmap function
+	return LoadVmmap(string(content))
 }
 
 func LoadVmmap(output string) ([]MemRegion, error) {
@@ -45,56 +45,63 @@ func LoadVmmap(output string) ([]MemRegion, error) {
 
 	scanner := bufio.NewScanner(strings.NewReader(output))
 
-	// Skip lines until we find the header
-	foundHeader := false
+	// Parse /proc/pid/maps format
+	// Format: address           perms offset  dev   inode   pathname
+	// Example: 55f4c0a00000-55f4c0a02000 r--p 00000000 08:01 1048576 /usr/bin/cat
+	re := regexp.MustCompile(`^([0-9a-f]+)-([0-9a-f]+)\s+([rwxp-]+)\s+[0-9a-f]+\s+[0-9a-f]+:[0-9a-f]+\s+\d+\s*(.*)$`)
+
 	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "==== Writable regions for") {
-			foundHeader = true
-			// Skip the column headers line
-			scanner.Scan()
-			break
-		}
-	}
-
-	if !foundHeader {
-		return nil, nil // No vmmap data found
-	}
-
-	// Regular expression to parse the vmmap output lines
-	// Format: REGION TYPE                    START - END         [ VSIZE  RSDNT  DIRTY   SWAP] PRT/MAX SHRMOD PURGE    REGION DETAIL
-	// Updated regex to capture RSDNT value (second value in brackets)
-	re := regexp.MustCompile(`^(\S+)\s+([0-9a-f]+)-([0-9a-f]+)\s+\[\s*(\S+)\s+(\S+)(?:\s+\S+){2}\]\s+(\S+)\s+(\S+)(?:\s+\S+)?\s+(.*)$`)
-
-	// Parse each line
-	for scanner.Scan() {
-		line := scanner.Text()
+		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
 
 		matches := re.FindStringSubmatch(line)
-		if len(matches) >= 9 { // Updated to check for at least 9 matches
-
+		if len(matches) >= 5 {
 			// Parse start and end addresses
-			start, _ := strconv.ParseUint(matches[2], 16, 64)
-			end, _ := strconv.ParseUint(matches[3], 16, 64)
+			start, err := strconv.ParseUint(matches[1], 16, 64)
+			if err != nil {
+				continue
+			}
+			end, err := strconv.ParseUint(matches[2], 16, 64)
+			if err != nil {
+				continue
+			}
 
-			// Parse VSize as numeric value
-			vsize := parseSize(matches[4])
+			permissions := matches[3]
+			pathname := strings.TrimSpace(matches[4])
 
-			// Parse RSDNT as numeric value (new)
-			rsdnt := parseSize(matches[5])
+			// Only include writable memory regions
+			if !strings.Contains(permissions, "w") {
+				continue
+			}
+
+			// Calculate size
+			vsize := end - start
+
+			// Determine region type based on pathname
+			regionType := "UNKNOWN"
+			if pathname == "" {
+				regionType = "[anonymous]"
+			} else if strings.Contains(pathname, "[heap]") {
+				regionType = "[heap]"
+			} else if strings.Contains(pathname, "[stack]") {
+				regionType = "[stack]"
+			} else if strings.Contains(pathname, ".so") {
+				regionType = "[library]"
+			} else {
+				regionType = "[mapped]"
+			}
 
 			region := MemRegion{
-				RegionType:   strings.TrimSpace(matches[1]),
+				RegionType:   regionType,
 				Start:        start,
 				End:          end,
 				VSize:        vsize,
-				RSDNT:        rsdnt,                         // Add the new RSDNT field
-				Permissions:  matches[6],                    // Shifted index
-				SHRMOD:       matches[7],                    // Shifted index
-				RegionDetail: strings.TrimSpace(matches[8]), // Shifted index
+				RSDNT:        vsize, // For Linux, assume all virtual memory is resident
+				Permissions:  permissions,
+				SHRMOD:       "PRV", // Default for Linux
+				RegionDetail: pathname,
 			}
 
 			regions = append(regions, region)

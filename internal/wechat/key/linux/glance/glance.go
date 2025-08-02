@@ -73,12 +73,11 @@ func (g *Glance) Read() ([]byte, error) {
 		dataCh <- data
 	}()
 
-	// 2 & 3. Execute lldb command to read memory directly with all parameters
-	size := region.End - region.Start
-	lldbCmd := fmt.Sprintf("lldb -p %d -o \"memory read --binary --force --outfile %s --count %d 0x%x\" -o \"quit\"",
-		g.PID, g.pipePath, size, region.Start)
+	// 2 & 3. Execute gdb command to read memory directly with all parameters
+	gdbCmd := fmt.Sprintf("gdb -p %d -batch -ex \"dump binary memory %s 0x%x 0x%x\" -ex \"quit\"",
+		g.PID, g.pipePath, region.Start, region.End)
 
-	cmd := exec.Command("bash", "-c", lldbCmd)
+	cmd := exec.Command("bash", "-c", gdbCmd)
 
 	// Set up stdout pipe for monitoring (optional)
 	stdout, err := cmd.StdoutPipe()

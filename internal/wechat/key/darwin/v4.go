@@ -230,14 +230,20 @@ func (e *V4Extractor) SearchKey(ctx context.Context, memory []byte) (string, boo
 
 			// Find pattern from end to beginning
 			index = bytes.LastIndex(memory[:index], keyPattern.Pattern)
+
 			if index == -1 {
 				break // No more matches found
 			}
-
+			//fmt.Printf("pos: %d \n", index)
+			//log.Debug().Msgf("pos: %d", index)
+			//log.Info().Msgf("pos: %d", index)
+			//log.Warn().Msgf("pos: %d", index)
+			//log.Error().Msgf("pos: %d", index)
 			// Try each offset for this pattern
 			for _, offset := range keyPattern.Offsets {
 				// Check if we have enough space for the key
 				keyOffset := index + offset
+				log.Debug().Msgf("offset: %d", keyOffset)
 				if keyOffset < 0 || keyOffset+32 > len(memory) {
 					continue
 				}
