@@ -18,7 +18,8 @@ const (
 	ProcessNameOfficial = "wechat"
 	ProcessNameBeta     = "Weixin"
 	V3DBFile            = "Message/msg_0.db"
-	V4DBFile            = "db_storage/session/session.db"
+	//V4DBFile            = "db_storage/session/session.db"
+	V4DBFile = "db_storage/message/message_0.db"
 )
 
 // Detector 实现 macOS 平台的进程检测器
