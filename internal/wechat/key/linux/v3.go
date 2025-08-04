@@ -1,9 +1,7 @@
 package linux
 
 import (
-	"bytes"
 	"context"
-	"encoding/hex"
 	linux_glance "github.com/sjzar/chatlog/internal/wechat/key/linux/glance"
 	"runtime"
 	"sync"
@@ -18,22 +16,12 @@ const (
 	MaxWorkersV3 = 8
 )
 
-var V3KeyPatterns = []KeyPatternInfo{
-	{
-		Pattern: []byte{0x72, 0x74, 0x72, 0x65, 0x65, 0x5f, 0x69, 0x33, 0x32},
-		Offsets: []int{24},
-	},
-}
-
 type V3Extractor struct {
-	validator   *decrypt.Validator
-	keyPatterns []KeyPatternInfo
+	validator *decrypt.Validator
 }
 
 func NewV3Extractor() *V3Extractor {
-	return &V3Extractor{
-		keyPatterns: V3KeyPatterns,
-	}
+	return &V3Extractor{}
 }
 
 func (e *V3Extractor) Extract(ctx context.Context, proc *model.Process) (string, error) {
@@ -213,47 +201,6 @@ func (e *V3Extractor) worker(ctx context.Context, memoryChannel <-chan []byte, r
 }
 
 func (e *V3Extractor) SearchKey(ctx context.Context, memory []byte) (string, bool) {
-	for _, keyPattern := range e.keyPatterns {
-		index := len(memory)
-
-		for {
-			select {
-			case <-ctx.Done():
-				return "", false
-			default:
-			}
-
-			// Find pattern from end to beginning
-			index = bytes.LastIndex(memory[:index], keyPattern.Pattern)
-			if index == -1 {
-				break // No more matches found
-			}
-
-			// Try each offset for this pattern
-			for _, offset := range keyPattern.Offsets {
-				// Check if we have enough space for the key
-				keyOffset := index + offset
-				if keyOffset < 0 || keyOffset+32 > len(memory) {
-					continue
-				}
-
-				// Extract the key data, which is at the offset position and 32 bytes long
-				keyData := memory[keyOffset : keyOffset+32]
-
-				// Validate key against database header
-				if e.validator.Validate(keyData) {
-					log.Debug().
-						Str("pattern", hex.EncodeToString(keyPattern.Pattern)).
-						Int("offset", offset).
-						Str("key", hex.EncodeToString(keyData)).
-						Msg("Key found")
-					return hex.EncodeToString(keyData), true
-				}
-			}
-
-			index -= 1
-		}
-	}
 
 	return "", false
 }
