@@ -1,5 +1,5 @@
 // Ubuntu版本的V4 testkey实现，与v4.go逻辑一致
-// 编译命令: gcc v4_testkey.c -o v4_testkey -O3 -lcrypto
+// 编译命令: gcc v4_testkey_linux.c -o v4_testkey_linux -O3 -lcrypto
 // 
 // 依赖安装 (Ubuntu/Debian):
 // sudo apt-get install build-essential libssl-dev
