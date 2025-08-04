@@ -293,7 +293,7 @@ int dumpkey(pid_t pid, const char *filename, char *outkey) {
         if (sscanf(line, "%lx-%lx %4s", &start, &end, permissions) == 3) {
             if (  strstr(line, "[heap]")) {
             heap_start= true;
-            continue
+            continue;
             }
             if (heap_start && strstr(line, "[") ) {
             heap_start = false;
