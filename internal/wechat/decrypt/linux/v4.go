@@ -14,16 +14,14 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 )
 
-// Darwin Version 4 same as WIndows Version 4
-
 // V4 版本特定常量
 const (
-	V4PageSize     = 4096
+	PageSize       = 4096
 	V4IterCount    = 256000
 	HmacSHA512Size = 64
 )
 
-// V4Decryptor 实现Windows V4版本的解密器
+// V4Decryptor 实现Linux V4版本的解密器
 type V4Decryptor struct {
 	// V4 特定参数
 	iterCount int
@@ -34,7 +32,7 @@ type V4Decryptor struct {
 	version   string
 }
 
-// NewV4Decryptor 创建Windows V4解密器
+// NewV4Decryptor 创建Linux V4解密器
 func NewV4Decryptor() *V4Decryptor {
 	hashFunc := sha512.New
 	hmacSize := HmacSHA512Size
@@ -48,8 +46,8 @@ func NewV4Decryptor() *V4Decryptor {
 		hmacSize:  hmacSize,
 		hashFunc:  hashFunc,
 		reserve:   reserve,
-		pageSize:  V4PageSize,
-		version:   "macOS v4",
+		pageSize:  PageSize,
+		version:   "Linux v4",
 	}
 }
 
@@ -188,7 +186,7 @@ func (d *V4Decryptor) GetVersion() string {
 	return d.version
 }
 
-// GetIterCount 返回迭代次数（Windows特有）
+// GetIterCount 返回迭代次数
 func (d *V4Decryptor) GetIterCount() int {
 	return d.iterCount
 }

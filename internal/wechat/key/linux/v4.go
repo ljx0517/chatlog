@@ -3,8 +3,8 @@ package linux
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
-	"fmt"
 	"runtime"
 	"sync"
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/sjzar/chatlog/internal/errors"
 	"github.com/sjzar/chatlog/internal/wechat/decrypt"
-	"github.com/sjzar/chatlog/internal/wechat/key/linux/glance"
+	linux_glance "github.com/sjzar/chatlog/internal/wechat/key/linux/glance"
 	"github.com/sjzar/chatlog/internal/wechat/model"
 )
 
@@ -23,22 +23,19 @@ const (
 	ChunkMultiplier   = 2               // Number of chunks = MaxWorkers * ChunkMultiplier
 )
 
-var V4KeyPatterns = []KeyPatternInfo{
-	{
-		Pattern: []byte{0x20, 0x66, 0x74, 0x73, 0x35, 0x28, 0x25, 0x00},
-		Offsets: []int{16, -80, 64},
-	},
+// V4 key search pattern based on Windows implementation
+var V4KeyPattern = []byte{
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x2F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 }
 
 type V4Extractor struct {
-	validator   *decrypt.Validator
-	keyPatterns []KeyPatternInfo
+	validator *decrypt.Validator
 }
 
 func NewV4Extractor() *V4Extractor {
-	return &V4Extractor{
-		keyPatterns: V4KeyPatterns,
-	}
+	return &V4Extractor{}
 }
 
 func (e *V4Extractor) Extract(ctx context.Context, proc *model.Process) (string, error) {
@@ -199,6 +196,10 @@ func (e *V4Extractor) findMemory(ctx context.Context, pid uint32, memoryChannel 
 
 // worker processes memory regions to find V4 version key
 func (e *V4Extractor) worker(ctx context.Context, memoryChannel <-chan []byte, resultChannel chan<- string) {
+	// Define search parameters for V4 (based on Windows implementation)
+	ptrSize := 8
+	littleEndianFunc := binary.LittleEndian.Uint64
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -208,81 +209,100 @@ func (e *V4Extractor) worker(ctx context.Context, memoryChannel <-chan []byte, r
 				return
 			}
 
-			if key, ok := e.SearchKey(ctx, memory); ok {
+			index := len(memory)
+			for {
 				select {
-				case resultChannel <- key:
+				case <-ctx.Done():
+					return // Exit if context cancelled
 				default:
 				}
+
+				// Find pattern from end to beginning
+				index = bytes.LastIndex(memory[:index], V4KeyPattern)
+				if index == -1 || index-ptrSize < 0 {
+					break
+				}
+
+				// Extract and validate pointer value
+				ptrValue := littleEndianFunc(memory[index-ptrSize : index])
+				if ptrValue > 0x10000 && ptrValue < 0x7FFFFFFFFFFF {
+					// For Linux, we can't directly read from pointer address like Windows
+					// Instead, we validate the key data at the pattern location
+					if key := e.validateKeyAtPattern(memory, index); key != "" {
+						select {
+						case resultChannel <- key:
+							log.Debug().Msg("Valid key found: " + key)
+							return
+						default:
+						}
+					}
+				}
+				index -= 1 // Continue searching from previous position
 			}
 		}
 	}
 }
 
-func (e *V4Extractor) SearchKey(ctx context.Context, memory []byte) (string, bool) {
-	for _, keyPattern := range e.keyPatterns {
-		index := len(memory)
+// validateKeyAtPattern validates a key candidate at the pattern location
+func (e *V4Extractor) validateKeyAtPattern(memory []byte, patternIndex int) string {
+	// Try different offsets to find the key relative to the pattern
+	// These offsets are based on typical memory layouts around the pattern
+	keyOffsets := []int{32, 48, 64, -32, -48, -64, 80, 96}
 
-		for {
-			select {
-			case <-ctx.Done():
-				return "", false
-			default:
-			}
-
-			// Find pattern from end to beginning
-			index = bytes.LastIndex(memory[:index], keyPattern.Pattern)
-
-			if index == -1 {
-				break // No more matches found
-			}
-			fmt.Printf("pos: %d \n", index)
-			//log.Debug().Msgf("pos: %d", index)
-			//log.Info().Msgf("pos: %d", index)
-			//log.Warn().Msgf("pos: %d", index)
-			//log.Error().Msgf("pos: %d", index)
-			// Try each offset for this pattern
-			for _, offset := range keyPattern.Offsets {
-				// Check if we have enough space for the key
-				keyOffset := index + offset
-				log.Debug().Msgf("offset: %d", keyOffset)
-				if keyOffset < 0 || keyOffset+32 > len(memory) {
-					continue
-				}
-
-				// Extract the key data, which is at the offset position and 32 bytes long
-				keyData := memory[keyOffset : keyOffset+32]
-
-				// Validate key against database header
-				if keyData, ok := e.validate(ctx, keyData); ok {
-					log.Debug().
-						Str("pattern", hex.EncodeToString(keyPattern.Pattern)).
-						Int("offset", offset).
-						Str("key", hex.EncodeToString(keyData)).
-						Msg("Key found")
-					return hex.EncodeToString(keyData), true
-				}
-			}
-
-			index -= 1
+	for _, offset := range keyOffsets {
+		keyOffset := patternIndex + offset
+		if keyOffset < 0 || keyOffset+32 > len(memory) {
+			continue
 		}
+
+		keyData := memory[keyOffset : keyOffset+32]
+
+		// Validate key against database header
+		if e.validator != nil && e.validator.Validate(keyData) {
+			log.Debug().
+				Int("pattern_index", patternIndex).
+				Int("key_offset", offset).
+				Str("key", hex.EncodeToString(keyData)).
+				Msg("Valid key found at pattern location")
+			return hex.EncodeToString(keyData)
+		}
+	}
+
+	return ""
+}
+
+func (e *V4Extractor) SearchKey(ctx context.Context, memory []byte) (string, bool) {
+	// Use the same logic as worker function for consistency
+	ptrSize := 8
+	littleEndianFunc := binary.LittleEndian.Uint64
+	index := len(memory)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return "", false
+		default:
+		}
+
+		// Find pattern from end to beginning
+		index = bytes.LastIndex(memory[:index], V4KeyPattern)
+		if index == -1 || index-ptrSize < 0 {
+			break
+		}
+
+		// Extract and validate pointer value
+		ptrValue := littleEndianFunc(memory[index-ptrSize : index])
+		if ptrValue > 0x10000 && ptrValue < 0x7FFFFFFFFFFF {
+			if key := e.validateKeyAtPattern(memory, index); key != "" {
+				return key, true
+			}
+		}
+		index -= 1
 	}
 
 	return "", false
 }
 
-func (e *V4Extractor) validate(ctx context.Context, keyDate []byte) ([]byte, bool) {
-	if e.validator.Validate(keyDate) {
-		return keyDate, true
-	}
-	// Try to find a valid key by ***
-	return nil, false
-}
-
 func (e *V4Extractor) SetValidate(validator *decrypt.Validator) {
 	e.validator = validator
-}
-
-type KeyPatternInfo struct {
-	Pattern []byte
-	Offsets []int
 }
