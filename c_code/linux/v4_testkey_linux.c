@@ -293,15 +293,16 @@ int dumpkey(pid_t pid, const char *filename, char *outkey) {
         if (sscanf(line, "%lx-%lx %4s", &start, &end, permissions) == 3) {
             if (  strstr(line, "[heap]")) {
             heap_start= true;
-//            continue;
+            continue;
             }
             if (heap_start && strstr(line, "[") ) {
             heap_start = false;
-//            break;
+            break;
             }
+             fprintf(stderr, "permissions %s %s", permissions[0] ,  permissions[1] );
             // 只搜索可读写的区域，主要是堆区域
             if (permissions[0] == 'r' && permissions[1] == 'w' ) {
-                fprintf(stderr, "try %d %d", start, end);
+                fprintf(stderr, "try %ld %ld", start, end);
                 if (search_memory_region(pid, start, end, page, outkey) == 0) {
                     fclose(maps_file);
                     ptrace(PTRACE_DETACH, pid, NULL, NULL);
