@@ -300,7 +300,7 @@ int dumpkey(pid_t pid, const char *filename, char *outkey) {
                 break;
             }
 
-             fprintf(stderr, "permissions %c %c\n", permissions[0] ,  permissions[1] );
+             fprintf(stderr, "permissions %c %c %d\n", permissions[0] ,  permissions[1], heap_start );
             // 只搜索可读写的区域，主要是堆区域
             if (permissions[0] == 'r' && permissions[1] == 'w' && heap_start ) {
                 fprintf(stderr, "try %ld %ld\n", start, end);
