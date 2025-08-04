@@ -2,9 +2,10 @@ package linux
 
 import (
 	"context"
-	linux_glance "github.com/sjzar/chatlog/internal/wechat/key/linux/glance"
 	"runtime"
 	"sync"
+
+	linux_glance "github.com/sjzar/chatlog/internal/wechat/key/linux/glance"
 
 	"github.com/rs/zerolog/log"
 	"github.com/sjzar/chatlog/internal/errors"
@@ -13,7 +14,10 @@ import (
 )
 
 const (
-	MaxWorkersV3 = 8
+	MaxWorkersV3      = 8
+	MinChunkSize      = 1 * 1024 * 1024 // 1MB
+	ChunkOverlapBytes = 1024            // Greater than all offsets
+	ChunkMultiplier   = 2               // Number of chunks = MaxWorkersV3 * ChunkMultiplier
 )
 
 type V3Extractor struct {
@@ -123,7 +127,7 @@ func (e *V3Extractor) findMemory(ctx context.Context, pid uint32, memoryChannel 
 		return nil
 	}
 
-	chunkCount := MaxWorkers * ChunkMultiplier
+	chunkCount := MaxWorkersV3 * ChunkMultiplier
 
 	// Calculate chunk size based on fixed chunk count
 	chunkSize := totalSize / chunkCount

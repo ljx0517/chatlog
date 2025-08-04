@@ -17,18 +17,8 @@ import (
 )
 
 const (
-	MaxWorkers        = 8
-	MinChunkSize      = 1 * 1024 * 1024 // 1MB
-	ChunkOverlapBytes = 1024            // Greater than all offsets
-	ChunkMultiplier   = 2               // Number of chunks = MaxWorkers * ChunkMultiplier
+	MaxWorkers = 16
 )
-
-// V4 key search pattern based on Windows implementation
-var V4KeyPattern = []byte{
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x2F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-}
 
 type V4Extractor struct {
 	validator *decrypt.Validator
@@ -41,15 +31,6 @@ func NewV4Extractor() *V4Extractor {
 func (e *V4Extractor) Extract(ctx context.Context, proc *model.Process) (string, error) {
 	if proc.Status == model.StatusOffline {
 		return "", errors.ErrWeChatOffline
-	}
-
-	// Check if SIP is disabled, as it's required for memory reading on macOS
-	//if !glance.IsSIPDisabled() {
-	//	return "", errors.ErrSIPEnabled
-	//}
-
-	if e.validator == nil {
-		return "", errors.ErrValidatorNotSet
 	}
 
 	// Create context to control all goroutines
@@ -88,7 +69,7 @@ func (e *V4Extractor) Extract(ctx context.Context, proc *model.Process) (string,
 		defer close(memoryChannel) // Close channel when producer is done
 		err := e.findMemory(searchCtx, uint32(proc.PID), memoryChannel)
 		if err != nil {
-			log.Err(err).Msg("Failed to read memory")
+			log.Err(err).Msg("Failed to find memory regions")
 		}
 	}()
 
@@ -112,7 +93,7 @@ func (e *V4Extractor) Extract(ctx context.Context, proc *model.Process) (string,
 	return "", errors.ErrNoValidKey
 }
 
-// findMemory searches for memory regions using Glance
+// findMemory searches for writable memory regions for V4 version
 func (e *V4Extractor) findMemory(ctx context.Context, pid uint32, memoryChannel chan<- []byte) error {
 	// Initialize a Glance instance to read process memory
 	g := linux_glance.NewGlance(pid)
@@ -123,72 +104,13 @@ func (e *V4Extractor) findMemory(ctx context.Context, pid uint32, memoryChannel 
 		return err
 	}
 
-	totalSize := len(memory)
-	log.Debug().Msgf("Read memory region, size: %d bytes", totalSize)
+	log.Debug().Msgf("Memory region for analysis, size: %d bytes", len(memory))
 
-	// If memory is small enough, process it as a single chunk
-	if totalSize <= MinChunkSize {
-		select {
-		case memoryChannel <- memory:
-			log.Debug().Msg("Memory sent as a single chunk for analysis")
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		return nil
-	}
-
-	chunkCount := MaxWorkers * ChunkMultiplier
-
-	// Calculate chunk size based on fixed chunk count
-	chunkSize := totalSize / chunkCount
-	if chunkSize < MinChunkSize {
-		// Reduce number of chunks if each would be too small
-		chunkCount = totalSize / MinChunkSize
-		if chunkCount == 0 {
-			chunkCount = 1
-		}
-		chunkSize = totalSize / chunkCount
-	}
-
-	// Process memory in chunks from end to beginning
-	for i := chunkCount - 1; i >= 0; i-- {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			// Calculate start and end positions for this chunk
-			start := i * chunkSize
-			end := (i + 1) * chunkSize
-
-			// Ensure the last chunk includes all remaining memory
-			if i == chunkCount-1 {
-				end = totalSize
-			}
-
-			// Add overlap area to catch patterns at chunk boundaries
-			if i > 0 {
-				start -= ChunkOverlapBytes
-				if start < 0 {
-					start = 0
-				}
-			}
-
-			chunk := memory[start:end]
-
-			log.Debug().
-				Int("chunk_index", i+1).
-				Int("total_chunks", chunkCount).
-				Int("chunk_size", len(chunk)).
-				Int("start_offset", start).
-				Int("end_offset", end).
-				Msg("Processing memory chunk")
-
-			select {
-			case memoryChannel <- chunk:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
+	select {
+	case memoryChannel <- memory:
+		log.Debug().Msgf("Memory sent for analysis")
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 
 	return nil
@@ -196,7 +118,12 @@ func (e *V4Extractor) findMemory(ctx context.Context, pid uint32, memoryChannel 
 
 // worker processes memory regions to find V4 version key
 func (e *V4Extractor) worker(ctx context.Context, memoryChannel <-chan []byte, resultChannel chan<- string) {
-	// Define search parameters for V4 (based on Windows implementation)
+	// Define search pattern for V4
+	keyPattern := []byte{
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x2F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	}
 	ptrSize := 8
 	littleEndianFunc := binary.LittleEndian.Uint64
 
@@ -218,7 +145,7 @@ func (e *V4Extractor) worker(ctx context.Context, memoryChannel <-chan []byte, r
 				}
 
 				// Find pattern from end to beginning
-				index = bytes.LastIndex(memory[:index], V4KeyPattern)
+				index = bytes.LastIndex(memory[:index], keyPattern)
 				if index == -1 || index-ptrSize < 0 {
 					break
 				}
@@ -226,9 +153,7 @@ func (e *V4Extractor) worker(ctx context.Context, memoryChannel <-chan []byte, r
 				// Extract and validate pointer value
 				ptrValue := littleEndianFunc(memory[index-ptrSize : index])
 				if ptrValue > 0x10000 && ptrValue < 0x7FFFFFFFFFFF {
-					// For Linux, we can't directly read from pointer address like Windows
-					// Instead, we validate the key data at the pattern location
-					if key := e.validateKeyAtPattern(memory, index); key != "" {
+					if key := e.validateKey(memory, index); key != "" {
 						select {
 						case resultChannel <- key:
 							log.Debug().Msg("Valid key found: " + key)
@@ -243,10 +168,10 @@ func (e *V4Extractor) worker(ctx context.Context, memoryChannel <-chan []byte, r
 	}
 }
 
-// validateKeyAtPattern validates a key candidate at the pattern location
-func (e *V4Extractor) validateKeyAtPattern(memory []byte, patternIndex int) string {
-	// Try different offsets to find the key relative to the pattern
-	// These offsets are based on typical memory layouts around the pattern
+// validateKey validates a single key candidate
+func (e *V4Extractor) validateKey(memory []byte, patternIndex int) string {
+	// For Linux, since we can't directly read from pointer address like Windows,
+	// we try to find the key data relative to the pattern location in the memory block
 	keyOffsets := []int{32, 48, 64, -32, -48, -64, 80, 96}
 
 	for _, offset := range keyOffsets {
@@ -258,12 +183,7 @@ func (e *V4Extractor) validateKeyAtPattern(memory []byte, patternIndex int) stri
 		keyData := memory[keyOffset : keyOffset+32]
 
 		// Validate key against database header
-		if e.validator != nil && e.validator.Validate(keyData) {
-			log.Debug().
-				Int("pattern_index", patternIndex).
-				Int("key_offset", offset).
-				Str("key", hex.EncodeToString(keyData)).
-				Msg("Valid key found at pattern location")
+		if e.validator.Validate(keyData) {
 			return hex.EncodeToString(keyData)
 		}
 	}
@@ -272,7 +192,12 @@ func (e *V4Extractor) validateKeyAtPattern(memory []byte, patternIndex int) stri
 }
 
 func (e *V4Extractor) SearchKey(ctx context.Context, memory []byte) (string, bool) {
-	// Use the same logic as worker function for consistency
+	// Define search pattern for V4
+	keyPattern := []byte{
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x2F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	}
 	ptrSize := 8
 	littleEndianFunc := binary.LittleEndian.Uint64
 	index := len(memory)
@@ -285,7 +210,7 @@ func (e *V4Extractor) SearchKey(ctx context.Context, memory []byte) (string, boo
 		}
 
 		// Find pattern from end to beginning
-		index = bytes.LastIndex(memory[:index], V4KeyPattern)
+		index = bytes.LastIndex(memory[:index], keyPattern)
 		if index == -1 || index-ptrSize < 0 {
 			break
 		}
@@ -293,7 +218,7 @@ func (e *V4Extractor) SearchKey(ctx context.Context, memory []byte) (string, boo
 		// Extract and validate pointer value
 		ptrValue := littleEndianFunc(memory[index-ptrSize : index])
 		if ptrValue > 0x10000 && ptrValue < 0x7FFFFFFFFFFF {
-			if key := e.validateKeyAtPattern(memory, index); key != "" {
+			if key := e.validateKey(memory, index); key != "" {
 				return key, true
 			}
 		}
