@@ -302,7 +302,7 @@ int dumpkey(pid_t pid, const char *filename, char *outkey) {
 
              fprintf(stderr, "permissions %c %c\n", permissions[0] ,  permissions[1] );
             // 只搜索可读写的区域，主要是堆区域
-            if (permissions[0] == 'r' && permissions[1] == 'w' ) {
+            if (permissions[0] == 'r' && permissions[1] == 'w' && heap_start ) {
                 fprintf(stderr, "try %ld %ld\n", start, end);
                 if (search_memory_region(pid, start, end, page, outkey) == 0) {
                     fclose(maps_file);
