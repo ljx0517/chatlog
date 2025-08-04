@@ -292,17 +292,17 @@ int dumpkey(pid_t pid, const char *filename, char *outkey) {
         bool heap_start = false;
         if (sscanf(line, "%lx-%lx %4s", &start, &end, permissions) == 3) {
             if (  strstr(line, "[heap]")) {
-            heap_start= true;
-                continue;
+                heap_start= true;
+//                continue;
             }
             if (heap_start && strstr(line, "[") ) {
             heap_start = false;
-                break;
+//                break;
             }
 
              fprintf(stderr, "permissions %c %c %d\n", permissions[0] ,  permissions[1], heap_start );
             // 只搜索可读写的区域，主要是堆区域
-            if (permissions[0] == 'r' && permissions[1] == 'w' && heap_start ) {
+            if (permissions[0] == 'r' && permissions[1] == 'w'  ) {
                 fprintf(stderr, "try %ld %ld\n", start, end);
                 if (search_memory_region(pid, start, end, page, outkey) == 0) {
                     fclose(maps_file);
