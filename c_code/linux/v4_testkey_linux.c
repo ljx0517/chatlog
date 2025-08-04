@@ -301,7 +301,7 @@ int dumpkey(pid_t pid, const char *filename, char *outkey) {
             }
             // 只搜索可读写的区域，主要是堆区域
             if (permissions[0] == 'r' && permissions[1] == 'w' ) {
-                
+                fprintf(stderr, "try %d %d", start, end);
                 if (search_memory_region(pid, start, end, page, outkey) == 0) {
                     fclose(maps_file);
                     ptrace(PTRACE_DETACH, pid, NULL, NULL);
