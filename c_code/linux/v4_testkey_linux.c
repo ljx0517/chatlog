@@ -292,10 +292,10 @@ int dumpkey(pid_t pid, const char *filename, char *outkey) {
         bool start = false;
         if (sscanf(line, "%lx-%lx %4s", &start, &end, permissions) == 3) {
             if (  strstr(line, "[heap]")) {
-            start= true
+            start= true;
             }
             if (start && strstr(line, "[") ) {
-            break
+            break;
             }
             // 只搜索可读写的区域，主要是堆区域
             if (permissions[0] == 'r' && permissions[1] == 'w' && start) {
