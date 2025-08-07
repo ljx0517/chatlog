@@ -178,7 +178,16 @@ func (m *Manager) StopCronService() error {
 	m.ctx.SetCronEnabled(false)
 	return nil
 }
+func (m *Manager) StopService() error {
+	if err := m.stopService(); err != nil {
+		return err
+	}
 
+	// 更新状态
+	m.ctx.SetHTTPEnabled(false)
+
+	return nil
+}
 func (m *Manager) stopService() error {
 	// 按依赖的反序停止服务
 	var errs []error
