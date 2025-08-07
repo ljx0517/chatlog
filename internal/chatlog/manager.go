@@ -3,6 +3,8 @@ package chatlog
 import (
 	"context"
 	"fmt"
+	"github.com/sjzar/chatlog/internal/chatlog/chatshot"
+	"github.com/sjzar/chatlog/internal/chatlog/cronTask"
 	"path/filepath"
 	"strings"
 
@@ -29,6 +31,9 @@ type Manager struct {
 	mcp    *mcp.Service
 	wechat *wechat.Service
 
+	cronTask *cronTask.Service
+	chatshot *chatshot.Service
+
 	// Terminal UI
 	app *App
 }
@@ -52,13 +57,19 @@ func New(configPath string) (*Manager, error) {
 
 	http := http.NewService(ctx, db, mcp)
 
+	chatshot := chatshot.NewService(ctx, db)
+
+	cronTask := cronTask.NewService(ctx, chatshot)
+
 	return &Manager{
-		conf:   conf,
-		ctx:    ctx,
-		db:     db,
-		mcp:    mcp,
-		http:   http,
-		wechat: wechat,
+		conf:     conf,
+		ctx:      ctx,
+		db:       db,
+		mcp:      mcp,
+		http:     http,
+		wechat:   wechat,
+		cronTask: cronTask,
+		chatshot: chatshot,
 	}, nil
 }
 
@@ -73,6 +84,12 @@ func (m *Manager) Run() error {
 		// 启动HTTP服务
 		if err := m.StartService(); err != nil {
 			m.StopService()
+		}
+	}
+	if m.ctx.CronEnabled {
+		// 启动Cron服务
+		if err := m.startCronService(); err != nil {
+			m.StopCronService()
 		}
 	}
 	// 启动终端UI
@@ -137,14 +154,28 @@ func (m *Manager) StartService() error {
 	return nil
 }
 
-func (m *Manager) StopService() error {
-	if err := m.stopService(); err != nil {
+func (m *Manager) startCronService() error {
+	if err := m.db.Start(); err != nil {
+		return err
+	}
+	err := m.cronTask.Start()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) StopCronService() error {
+
+	if !m.ctx.CronEnabled {
+		return nil
+	}
+	if err := m.cronTask.Stop(); err != nil {
 		return err
 	}
 
 	// 更新状态
-	m.ctx.SetHTTPEnabled(false)
-
+	m.ctx.SetCronEnabled(false)
 	return nil
 }
 

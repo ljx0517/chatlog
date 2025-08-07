@@ -121,6 +121,15 @@ func (a *App) updateMenuItemsState() {
 				item.Description = "启动本地 HTTP & MCP 服务器"
 			}
 		}
+		if item.Index == 8 {
+			if a.ctx.CronEnabled {
+				item.Name = "停止 Cron 服务"
+				item.Description = "停止本地 Cron 服务"
+			} else {
+				item.Name = "启动 Cron 服务"
+				item.Description = "启动本地 Cron 服务器"
+			}
+		}
 	}
 }
 
@@ -442,15 +451,31 @@ func (a *App) initMenu() {
 		Selected:    a.selectAccountSelected,
 	}
 
+	cronTask := &menu.Item{
+		Index:       8,
+		Name:        "启动定时任务",
+		Description: "定时生成报告",
+		Selected:    a.startCronTask,
+	}
+
+	chatshot := &menu.Item{
+		Index:       9,
+		Name:        "手动生成报告",
+		Description: "手动生成报告",
+		Selected:    a.startShot,
+	}
+
 	a.menu.AddItem(getDataKey)
 	a.menu.AddItem(decryptData)
 	a.menu.AddItem(httpServer)
 	a.menu.AddItem(autoDecrypt)
 	a.menu.AddItem(setting)
 	a.menu.AddItem(selectAccount)
+	a.menu.AddItem(cronTask)
+	a.menu.AddItem(chatshot)
 
 	a.menu.AddItem(&menu.Item{
-		Index:       8,
+		Index:       10,
 		Name:        "退出",
 		Description: "退出程序",
 		Selected: func(i *menu.Item) {
@@ -811,4 +836,108 @@ func (a *App) showInfo(text string) {
 	a.showModal(text, []string{"OK"}, func(buttonIndex int, buttonLabel string) {
 		a.mainPages.RemovePage("modal")
 	})
+}
+
+// startCronTask
+func (a *App) startCronTask(i *menu.Item) {
+	modal := tview.NewModal()
+
+	// 根据当前服务状态执行不同操作
+	if !a.ctx.CronEnabled {
+		// HTTP 服务未启动，启动服务
+		modal.SetText("正在启动 Cron 服务...")
+		a.mainPages.AddPage("modal", modal, true, true)
+		a.SetFocus(modal)
+
+		// 在后台启动服务
+		go func() {
+			err := a.m.startCronService()
+
+			// 在主线程中更新UI
+			a.QueueUpdateDraw(func() {
+				if err != nil {
+					// 启动失败
+					modal.SetText("启动 Cron 服务失败: " + err.Error())
+				} else {
+					// 启动成功
+					modal.SetText("已启动 Cron 服务")
+				}
+
+				a.m.ctx.SetCronEnabled(true)
+				// 更改菜单项名称
+				a.updateMenuItemsState()
+
+				// 添加确认按钮
+				modal.AddButtons([]string{"OK"})
+				modal.SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+					a.mainPages.RemovePage("modal")
+				})
+				a.SetFocus(modal)
+			})
+		}()
+	} else {
+		// HTTP 服务已启动，停止服务
+		modal.SetText("正在停止 Cron 服务...")
+		a.mainPages.AddPage("modal", modal, true, true)
+		a.SetFocus(modal)
+
+		// 在后台停止服务
+		go func() {
+			err := a.m.StopService()
+
+			// 在主线程中更新UI
+			a.QueueUpdateDraw(func() {
+				if err != nil {
+					// 停止失败
+					modal.SetText("停止 Cron 服务失败: " + err.Error())
+				} else {
+					// 停止成功
+					modal.SetText("已停止 Cron 服务")
+				}
+
+				// 更改菜单项名称
+				a.updateMenuItemsState()
+
+				// 添加确认按钮
+				modal.AddButtons([]string{"OK"})
+				modal.SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+					a.mainPages.RemovePage("modal")
+				})
+				a.SetFocus(modal)
+			})
+		}()
+	}
+}
+
+func (a *App) startShot(i *menu.Item) {
+	modal := tview.NewModal()
+	modal.SetText("正在生成...")
+	a.mainPages.AddPage("modal", modal, true, true)
+	a.SetFocus(modal)
+
+	// 在后台启动服务
+	go func() {
+		err := a.m.chatshot.Shot()
+		// 在主线程中更新UI
+		a.QueueUpdateDraw(func() {
+			if err != nil {
+				// 启动失败
+				modal.SetText("生成失败: " + err.Error())
+			} else {
+				// 启动成功
+				modal.SetText("已生成")
+			}
+
+			// 更改菜单项名称
+			a.updateMenuItemsState()
+
+			// 添加确认按钮
+			modal.AddButtons([]string{"OK"})
+			modal.SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+				a.mainPages.RemovePage("modal")
+			})
+			a.SetFocus(modal)
+		})
+	}()
+
 }

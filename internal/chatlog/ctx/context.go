@@ -47,6 +47,8 @@ type Context struct {
 
 	// 所有可用的微信实例
 	WeChatInstances []*wechat.Account
+
+	CronEnabled bool
 }
 
 func New(conf *conf.Service) *Context {
@@ -83,6 +85,7 @@ func (c *Context) SwitchHistory(account string) {
 		c.DataDir = history.DataDir
 		c.WorkDir = history.WorkDir
 		c.HTTPEnabled = history.HTTPEnabled
+		c.CronEnabled = history.CronEnabled
 		c.HTTPAddr = history.HTTPAddr
 	} else {
 		c.Account = ""
@@ -134,6 +137,13 @@ func (c *Context) Refresh() {
 	}
 }
 
+func (c *Context) SetCronEnabled(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.CronEnabled = enabled
+	c.UpdateConfig()
+}
+
 func (c *Context) SetHTTPEnabled(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -183,6 +193,7 @@ func (c *Context) UpdateConfig() {
 		DataKey:     c.DataKey,
 		WorkDir:     c.WorkDir,
 		HTTPEnabled: c.HTTPEnabled,
+		CronEnabled: c.CronEnabled,
 		HTTPAddr:    c.HTTPAddr,
 	}
 	conf := c.conf.GetConfig()

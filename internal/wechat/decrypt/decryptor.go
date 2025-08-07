@@ -7,7 +7,6 @@ import (
 
 	"github.com/sjzar/chatlog/internal/errors"
 	"github.com/sjzar/chatlog/internal/wechat/decrypt/darwin"
-	"github.com/sjzar/chatlog/internal/wechat/decrypt/linux"
 	"github.com/sjzar/chatlog/internal/wechat/decrypt/windows"
 )
 
@@ -46,7 +45,7 @@ func NewDecryptor(platform string, version int) (Decryptor, error) {
 	case platform == "darwin" && version == 4:
 		return darwin.NewV4Decryptor(), nil
 	case platform == "linux" && version == 4:
-		return linux.NewV4Decryptor(), nil
+		return windows.NewV4Decryptor(), nil
 	default:
 		return nil, errors.PlatformUnsupported(platform, version)
 	}

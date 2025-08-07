@@ -18,6 +18,7 @@ type ProcessConfig struct {
 	DataKey     string `mapstructure:"data_key" json:"data_key"`
 	WorkDir     string `mapstructure:"work_dir" json:"work_dir"`
 	HTTPEnabled bool   `mapstructure:"http_enabled" json:"http_enabled"`
+	CronEnabled bool   `mapstructure:"cron_enabled" json:"cron_enabled"`
 	HTTPAddr    string `mapstructure:"http_addr" json:"http_addr"`
 	LastTime    int64  `mapstructure:"last_time" json:"last_time"`
 	Files       []File `mapstructure:"files" json:"files"`

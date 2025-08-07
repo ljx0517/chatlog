@@ -153,7 +153,7 @@ func (e *V4Extractor) worker(ctx context.Context, memoryChannel <-chan []byte, r
 				// Extract and validate pointer value
 				ptrValue := littleEndianFunc(memory[index-ptrSize : index])
 				if ptrValue > 0x10000 && ptrValue < 0x7FFFFFFFFFFF {
-					if key := e.validateKey(memory, index); key != "" {
+					if key := e.validateKey(memory, ptrValue, index); key != "" {
 						select {
 						case resultChannel <- key:
 							log.Debug().Msg("Valid key found: " + key)
@@ -169,9 +169,24 @@ func (e *V4Extractor) worker(ctx context.Context, memoryChannel <-chan []byte, r
 }
 
 // validateKey validates a single key candidate
-func (e *V4Extractor) validateKey(memory []byte, patternIndex int) string {
+func (e *V4Extractor) validateKey(memory []byte, ptrValue uint64, patternIndex int) string {
 	// For Linux, since we can't directly read from pointer address like Windows,
-	// we try to find the key data relative to the pattern location in the memory block
+	// we need to find the corresponding location in our memory block
+
+	// First, try to calculate the relative offset from the pointer value
+	// This assumes the memory block starts from some base address
+	// and the pointer points to a location within this block
+
+	// Strategy 1: Try direct conversion if ptrValue might be a relative offset
+	if int(ptrValue) >= 0 && int(ptrValue)+32 <= len(memory) {
+		keyData := memory[ptrValue : ptrValue+32]
+		if e.validator.Validate(keyData) {
+			return hex.EncodeToString(keyData)
+		}
+	}
+
+	// Strategy 2: Use pattern-relative offsets as fallback
+	// These offsets are based on typical memory layouts around the pattern
 	keyOffsets := []int{32, 48, 64, -32, -48, -64, 80, 96}
 
 	for _, offset := range keyOffsets {
@@ -218,7 +233,7 @@ func (e *V4Extractor) SearchKey(ctx context.Context, memory []byte) (string, boo
 		// Extract and validate pointer value
 		ptrValue := littleEndianFunc(memory[index-ptrSize : index])
 		if ptrValue > 0x10000 && ptrValue < 0x7FFFFFFFFFFF {
-			if key := e.validateKey(memory, index); key != "" {
+			if key := e.validateKey(memory, ptrValue, index); key != "" {
 				return key, true
 			}
 		}
