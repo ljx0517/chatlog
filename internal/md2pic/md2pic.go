@@ -8,6 +8,7 @@ import (
 	"go.abhg.dev/goldmark/mermaid/mermaidcdp"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -39,19 +40,24 @@ func hexStrToChar(hexStr []int32) (string, error) {
 	return strings.Join(cps, ""), nil
 }
 
-func Md2Pic(name string, mdContent string) error {
+func Md2Pic(mdContent string, savePath string, saveName string) error {
+	name := filepath.Join(savePath, saveName)
 	// 1. 读取 Markdown 文件
 	//mdContent, err := os.ReadFile("input.md")
 	//if err != nil {
 	//	panic(err)
 	//}
 
+	mdContent = strings.TrimPrefix(mdContent, "```markdown")
+	mdContent = strings.TrimSuffix(mdContent, "```")
 	if err := os.WriteFile(name+".md", []byte(mdContent), 0644); err != nil {
 		return err
 	}
-
 	// 2. 将 Markdown 转换为 HTML
-	htmlContent := convertMarkdownToHTML([]byte(mdContent))
+	htmlContent, err := convertMarkdownToHTML([]byte(mdContent))
+	if err != nil {
+		return err
+	}
 	if err := os.WriteFile(name+".html", htmlContent, 0644); err != nil {
 		return err
 	}
@@ -70,7 +76,7 @@ func Md2Pic(name string, mdContent string) error {
 }
 
 // Markdown 转 HTML
-func convertMarkdownToHTML(md []byte) []byte {
+func convertMarkdownToHTML(md []byte) ([]byte, error) {
 	//<script>
 	//	mermaid.initialize({
 	//theme: 'default',
@@ -108,9 +114,9 @@ func convertMarkdownToHTML(md []byte) []byte {
 		),
 		// ...
 	).Convert(md, &buf); err != nil {
-		panic(err)
+		return nil, err
 	}
-	return []byte(head + buf.String() + foot)
+	return []byte(head + buf.String() + foot), nil
 }
 
 // HTML 转 PNG 图片

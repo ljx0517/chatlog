@@ -1,6 +1,8 @@
 package util
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -51,4 +53,26 @@ func IsFile(path string) (bool, error) {
 		return false, err
 	}
 	return !fileInfo.IsDir(), nil
+}
+
+func EnsureDirExists(dir string, perm os.FileMode) error {
+	// 检查目录状态
+	info, err := os.Stat(dir)
+	if err != nil {
+		// 目录不存在，尝试创建
+		if errors.Is(err, os.ErrNotExist) {
+			// MkdirAll 会创建所有不存在的父目录，已存在则不报错
+			return os.MkdirAll(dir, perm)
+		}
+		// 其他错误（如权限不足）
+		return err
+	}
+
+	// 目录存在，但不是文件夹（是文件）
+	if !info.IsDir() {
+		return fmt.Errorf("路径已存在但不是目录: %s", dir)
+	}
+
+	// 目录存在且是文件夹
+	return nil
 }

@@ -64,7 +64,7 @@ func GetMd(charContent string, key string, api string, model string, prompts str
 					},
 				},
 			},
-			{"role": "user", "content": "Hello!"},
+			{"role": "user", "content": charContent},
 		},
 		"stream": false,
 	}

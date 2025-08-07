@@ -2,7 +2,6 @@ package chatshot
 
 import (
 	"encoding/json"
-	"fmt"
 	"github.com/rs/zerolog/log"
 	"github.com/sjzar/chatlog/internal/chatlog/ctx"
 	"github.com/sjzar/chatlog/internal/chatlog/database"
@@ -10,6 +9,7 @@ import (
 	"github.com/sjzar/chatlog/internal/md2pic"
 	"github.com/sjzar/chatlog/pkg/util"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -167,7 +167,8 @@ func (s *Service) GenerateReport(cfg util.LLMConfig, db *database.Service) error
 	}{}
 	var talkers = strings.Split(cfg.Talkers, ",")
 	now := time.Now()
-	dateStr := now.Format("20060102150405")
+	timeStr := now.Format("20060102150405")
+	dateStr := now.Format("2006-01-02")
 	q.Time = dateStr
 
 	var start, end, _ = util.TimeRangeOf(q.Time)
@@ -175,8 +176,13 @@ func (s *Service) GenerateReport(cfg util.LLMConfig, db *database.Service) error
 	//md2pic.Md2Pic("_"+dateStr, md)
 	//return errors.New("test finished")
 
-	fmt.Println("Every hour on the half hour")
 	for _, talker := range talkers {
+		if talker == "" {
+			continue
+		}
+		savePath := filepath.Join(dateStr, util.FormatValidFilename(talker, 50))
+		saveName := util.FormatValidFilename(talker, 50) + "_" + timeStr
+		util.EnsureDirExists(savePath, 0755)
 		var messages, _ = db.GetMessages(start, end, talker, "", "", 0, 0)
 		if len(messages) == 0 {
 			continue
@@ -188,7 +194,8 @@ func (s *Service) GenerateReport(cfg util.LLMConfig, db *database.Service) error
 		}
 		var content = strings.Join(merged, "\n")
 		var md, _ = llm.GetMd(content, cfg.Key, cfg.Api, cfg.Model, cfg.Prompts)
-		md2pic.Md2Pic(util.FormatValidFilename(talker, 50)+"_"+dateStr, md)
+
+		md2pic.Md2Pic(md, savePath, saveName)
 	}
 	return nil
 }
