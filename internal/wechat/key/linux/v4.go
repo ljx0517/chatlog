@@ -6,14 +6,10 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -24,13 +20,18 @@ import (
 )
 
 const (
-	MaxWorkers    = 16
-	MinRegionSize = 1 * 1024 * 1024 // 1MB - 学习Windows策略，过滤小内存区域
+	MaxWorkers        = 16
+	MinRegionSize     = 1 * 1024 * 1024 // 1MB - 过滤小内存区域
+	ChannelBuffer     = 200             // 优化channel缓冲区大小
+	BatchValidateSize = 8               // 批量验证密钥数量
+	MaxRetryAttempts  = 3               // 内存读取重试次数
 )
 
 type V4Extractor struct {
-	validator  *decrypt.Validator
-	currentPID uint32 // 保存当前处理的PID，用于worker中的指针解引用
+	validator    *decrypt.Validator
+	currentPID   uint32       // 保存当前处理的PID，用于worker中的指针解引用
+	memFile      *os.File     // /proc/pid/mem文件句柄，复用避免重复打开
+	memFileMutex sync.RWMutex // 保护memFile的并发访问
 }
 
 func NewV4Extractor() *V4Extractor {
@@ -42,15 +43,19 @@ func (e *V4Extractor) Extract(ctx context.Context, proc *model.Process) (string,
 		return "", errors.ErrWeChatOffline
 	}
 
-	// 设置当前PID，用于worker中的指针解引用
+	// 设置当前PID并初始化内存文件句柄
 	e.currentPID = uint32(proc.PID)
+	if err := e.initMemoryFile(); err != nil {
+		return "", fmt.Errorf("failed to initialize memory file: %w", err)
+	}
+	defer e.closeMemoryFile()
 
 	// Create context to control all goroutines
 	searchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Create channels for memory data and results
-	memoryChannel := make(chan []byte, 100)
+	// Create channels for memory data and results - 优化缓冲区大小
+	memoryChannel := make(chan []byte, ChannelBuffer)
 	resultChannel := make(chan string, 1)
 
 	// Determine number of worker goroutines
@@ -103,6 +108,38 @@ func (e *V4Extractor) Extract(ctx context.Context, proc *model.Process) (string,
 	}
 
 	return "", errors.ErrNoValidKey
+}
+
+// initMemoryFile 初始化/proc/pid/mem文件句柄用于直接内存访问
+func (e *V4Extractor) initMemoryFile() error {
+	e.memFileMutex.Lock()
+	defer e.memFileMutex.Unlock()
+
+	if e.memFile != nil {
+		return nil // 已经初始化
+	}
+
+	memPath := fmt.Sprintf("/proc/%d/mem", e.currentPID)
+	file, err := os.OpenFile(memPath, os.O_RDONLY, 0)
+	if err != nil {
+		return fmt.Errorf("failed to open %s: %w", memPath, err)
+	}
+
+	e.memFile = file
+	log.Debug().Msgf("Successfully opened memory file for PID %d", e.currentPID)
+	return nil
+}
+
+// closeMemoryFile 关闭内存文件句柄
+func (e *V4Extractor) closeMemoryFile() {
+	e.memFileMutex.Lock()
+	defer e.memFileMutex.Unlock()
+
+	if e.memFile != nil {
+		e.memFile.Close()
+		e.memFile = nil
+		log.Debug().Msgf("Closed memory file for PID %d", e.currentPID)
+	}
 }
 
 // findMemory searches for writable memory regions for V4 version
@@ -193,60 +230,70 @@ func (e *V4Extractor) readMemoryRegion(pid uint32, region linux_glance.MemRegion
 	return g.Read()
 }
 
-// readMemoryAtAddress reads specific memory address using gdb
-// 这是Windows ReadProcessMemory在Linux上的等效实现
+// readMemoryAtAddress 直接从/proc/pid/mem读取指定地址的内存
+// 高效替代gdb方案，无需外部工具依赖
 func (e *V4Extractor) readMemoryAtAddress(pid uint32, address uint64, size int) ([]byte, error) {
-	// 使用gdb直接从指定地址读取内存
-	pipePath := filepath.Join(os.TempDir(), fmt.Sprintf("chatlog_key_pipe_%d_%x", pid, address))
+	e.memFileMutex.RLock()
+	defer e.memFileMutex.RUnlock()
 
-	// 创建命名管道
-	if err := exec.Command("mkfifo", pipePath).Run(); err != nil {
-		return nil, errors.CreatePipeFileFailed(err)
+	if e.memFile == nil {
+		return nil, fmt.Errorf("memory file not initialized for PID %d", pid)
 	}
-	defer os.Remove(pipePath)
 
-	// 启动读取goroutine
-	dataCh := make(chan []byte, 1)
-	errCh := make(chan error, 1)
+	// 重试机制处理临时读取失败
+	var lastErr error
+	for attempt := 0; attempt < MaxRetryAttempts; attempt++ {
+		data := make([]byte, size)
+		n, err := e.memFile.ReadAt(data, int64(address))
 
-	go func() {
-		file, err := os.OpenFile(pipePath, os.O_RDONLY, 0600)
-		if err != nil {
-			errCh <- errors.OpenPipeFileFailed(err)
-			return
+		if err == nil && n == size {
+			log.Debug().Msgf("Successfully read %d bytes from address 0x%x (attempt %d)",
+				size, address, attempt+1)
+			return data, nil
 		}
-		defer file.Close()
 
-		data, err := io.ReadAll(file)
-		if err != nil {
-			errCh <- errors.ReadPipeFileFailed(err)
-			return
+		lastErr = err
+		if attempt < MaxRetryAttempts-1 {
+			log.Debug().Err(err).Msgf("Read attempt %d failed, retrying...", attempt+1)
 		}
-		dataCh <- data
-	}()
-
-	// 执行gdb命令读取指定地址的内存
-	endAddr := address + uint64(size)
-	gdbCmd := fmt.Sprintf("gdb -p %d -batch -ex \"dump binary memory %s 0x%x 0x%x\" -ex \"quit\"",
-		pid, pipePath, address, endAddr)
-
-	cmd := exec.Command("bash", "-c", gdbCmd)
-	if err := cmd.Start(); err != nil {
-		return nil, errors.RunCmdFailed(err)
 	}
 
-	// 等待读取完成
-	select {
-	case data := <-dataCh:
-		cmd.Wait() // 等待gdb进程结束
-		return data, nil
-	case err := <-errCh:
-		cmd.Process.Kill()
-		return nil, err
-	case <-time.After(10 * time.Second): // 指定地址读取应该很快
-		cmd.Process.Kill()
-		return nil, errors.ErrReadMemoryTimeout
+	return nil, fmt.Errorf("failed to read memory at 0x%x after %d attempts: %w",
+		address, MaxRetryAttempts, lastErr)
+}
+
+// batchReadMemory 批量读取多个内存地址，减少系统调用开销
+func (e *V4Extractor) batchReadMemory(candidates []uint64, keySize int) map[uint64][]byte {
+	results := make(map[uint64][]byte)
+
+	e.memFileMutex.RLock()
+	defer e.memFileMutex.RUnlock()
+
+	if e.memFile == nil {
+		log.Warn().Msg("Memory file not initialized, skipping batch read")
+		return results
 	}
+
+	for _, addr := range candidates {
+		if data, err := e.readMemoryAtAddressUnsafe(addr, keySize); err == nil {
+			results[addr] = data
+		} else {
+			log.Debug().Err(err).Msgf("Failed to read memory at 0x%x", addr)
+		}
+	}
+
+	log.Debug().Msgf("Batch read completed: %d/%d successful", len(results), len(candidates))
+	return results
+}
+
+// readMemoryAtAddressUnsafe 内部使用的无锁版本，用于批量操作
+func (e *V4Extractor) readMemoryAtAddressUnsafe(address uint64, size int) ([]byte, error) {
+	data := make([]byte, size)
+	n, err := e.memFile.ReadAt(data, int64(address))
+	if err != nil || n != size {
+		return nil, fmt.Errorf("read failed at 0x%x: %w", address, err)
+	}
+	return data, nil
 }
 
 // worker processes memory regions to find V4 version key
@@ -269,55 +316,94 @@ func (e *V4Extractor) worker(ctx context.Context, memoryChannel <-chan []byte, r
 				return
 			}
 
-			index := len(memory)
-			for {
+			// 收集所有候选指针地址，批量处理提升效率
+			candidates := e.findCandidatePointers(memory, keyPattern, ptrSize, littleEndianFunc)
+			if len(candidates) == 0 {
+				continue
+			}
+
+			log.Debug().Msgf("Found %d candidate pointers for validation", len(candidates))
+
+			// 批量验证候选指针
+			if key := e.batchValidateKeys(candidates); key != "" {
 				select {
-				case <-ctx.Done():
-					return // Exit if context cancelled
+				case resultChannel <- key:
+					log.Debug().Msg("Valid key found: " + key)
+					return
 				default:
 				}
-
-				// Find pattern from end to beginning
-				index = bytes.LastIndex(memory[:index], keyPattern)
-				if index == -1 || index-ptrSize < 0 {
-					break
-				}
-
-				// Extract and validate pointer value
-				ptrValue := littleEndianFunc(memory[index-ptrSize : index])
-				if ptrValue > 0x10000 && ptrValue < 0x7FFFFFFFFFFF {
-					// 使用Windows V4的验证策略：直接读取指针地址
-					if key := e.validateKey(e.currentPID, ptrValue); key != "" {
-						select {
-						case resultChannel <- key:
-							log.Debug().Msg("Valid key found: " + key)
-							return
-						default:
-						}
-					}
-				}
-				index -= 1 // Continue searching from previous position
 			}
 		}
 	}
 }
 
-// validateKey validates a single key candidate
-// 移植Windows V4的验证策略：通过gdb直接读取指针地址
+// findCandidatePointers 在内存中查找所有候选指针地址
+func (e *V4Extractor) findCandidatePointers(memory []byte, keyPattern []byte, ptrSize int,
+	littleEndianFunc func([]byte) uint64) []uint64 {
+	var candidates []uint64
+	index := len(memory)
+
+	for {
+		// Find pattern from end to beginning
+		index = bytes.LastIndex(memory[:index], keyPattern)
+		if index == -1 || index-ptrSize < 0 {
+			break
+		}
+
+		// Extract and validate pointer value
+		ptrValue := littleEndianFunc(memory[index-ptrSize : index])
+		if ptrValue > 0x10000 && ptrValue < 0x7FFFFFFFFFFF {
+			candidates = append(candidates, ptrValue)
+
+			// 限制批量大小，避免内存占用过大
+			if len(candidates) >= BatchValidateSize {
+				break
+			}
+		}
+		index -= 1
+	}
+
+	return candidates
+}
+
+// validateKey validates a single key candidate (保留单个验证用于兼容性)
 func (e *V4Extractor) validateKey(pid uint32, ptrValue uint64) string {
-	// 使用gdb直接读取指针指向的32字节数据
-	// 这是Windows V4中ReadProcessMemory的Linux等效实现
 	keyData, err := e.readMemoryAtAddress(pid, ptrValue, 32)
 	if err != nil {
 		log.Debug().Err(err).Msgf("Failed to read memory at address 0x%x", ptrValue)
 		return ""
 	}
 
-	// 直接验证密钥，与Windows V4逻辑完全一致
 	if e.validator.Validate(keyData) {
 		return hex.EncodeToString(keyData)
 	}
 
+	return ""
+}
+
+// batchValidateKeys 批量验证候选密钥，提升验证效率
+func (e *V4Extractor) batchValidateKeys(candidates []uint64) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+
+	// 批量读取所有候选地址的数据
+	keyDataMap := e.batchReadMemory(candidates, 32)
+	if len(keyDataMap) == 0 {
+		log.Debug().Msg("No valid memory reads from candidates")
+		return ""
+	}
+
+	// 验证每个读取到的密钥数据
+	for addr, keyData := range keyDataMap {
+		if e.validator.Validate(keyData) {
+			key := hex.EncodeToString(keyData)
+			log.Debug().Msgf("Valid key found at address 0x%x: %s", addr, key)
+			return key
+		}
+	}
+
+	log.Debug().Msgf("No valid keys found in %d candidates", len(candidates))
 	return ""
 }
 
@@ -336,30 +422,16 @@ func (e *V4Extractor) SearchKey(ctx context.Context, memory []byte) (string, boo
 	}
 	ptrSize := 8
 	littleEndianFunc := binary.LittleEndian.Uint64
-	index := len(memory)
 
-	for {
-		select {
-		case <-ctx.Done():
-			return "", false
-		default:
-		}
+	// 使用批量处理提升效率
+	candidates := e.findCandidatePointers(memory, keyPattern, ptrSize, littleEndianFunc)
+	if len(candidates) == 0 {
+		return "", false
+	}
 
-		// Find pattern from end to beginning
-		index = bytes.LastIndex(memory[:index], keyPattern)
-		if index == -1 || index-ptrSize < 0 {
-			break
-		}
-
-		// Extract and validate pointer value
-		ptrValue := littleEndianFunc(memory[index-ptrSize : index])
-		if ptrValue > 0x10000 && ptrValue < 0x7FFFFFFFFFFF {
-			// 使用Windows V4的验证策略：直接读取指针地址
-			if key := e.validateKey(e.currentPID, ptrValue); key != "" {
-				return key, true
-			}
-		}
-		index -= 1
+	// 批量验证，找到第一个有效密钥即返回
+	if key := e.batchValidateKeys(candidates); key != "" {
+		return key, true
 	}
 
 	return "", false
